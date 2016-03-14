@@ -1,0 +1,72 @@
+##############################################################################
+# Dockerfile project for building a monolithic installation of t24
+# Source image https://github.com/fxmartin/docker-sshd-nginx provides
+# nginx and sshd as well.
+#
+# Build with docker build -t fxmartin/docker-t24 monolithic .
+#
+# Syncordis Copyright 2016
+# Author: FX
+# Date: 09-mar-2016
+# Version: 1.0
+##############################################################################
+
+FROM fxmartin/docker-oracle-jdk7
+
+# Maintainer details
+MAINTAINER fxmartin <fxmartin@syncordisconsulting.com>
+
+# set-up h2
+RUN wget http://www.h2database.com/h2-2014-04-05.zip && \
+	unzip h2-2014-04-05.zip -d /opt/ && \
+	rm h2-2014-04-05.zip
+ADD h2/h2-server.sh /opt/h2/bin/h2-server.sh
+ADD h2/TAFJFunctions.jar /opt/h2/bin/TAFJFunctions.jar
+RUN chmod +x /opt/h2/bin/h2-server.sh
+ADD h2/h2-conf /opt/h2-conf
+RUN mkdir -p /opt/h2-data
+
+# This is needed for the TAFj/bin scripts who use ksh
+RUN ln -s /bin/bash /bin/ksh
+
+# simulating ENTER keypress to circumvent interactive installation
+# and cleaning-up at the end the installation files
+RUN mkdir /Temenos && \
+	cd Temenos && \
+	wget http://192.168.178.125:8000/tafj.r15.sp5.0.tar.gz && \
+	tar zxvf tafj.r15.sp5.0.tar.gz && \
+	chmod u+x /Temenos/Setup_TAFJ.R15.SP5.0.sh && \
+	cd /Temenos && \
+	echo -ne '\n\ny\n' | /Temenos/Setup_TAFJ.R15.SP5.0.sh && \
+	rm TAFJ.R15.SP5.0.jar && \
+	rm Setup* && \
+	rm Patch* && \
+	rm tafj.r15.sp5.0.tar.gz
+
+# Set-up TAFJ
+# Copy database drivers
+RUN cp -R Temenos/TAFJ/dbdrivers/h2-1.3.176 /Temenos/TAFJ/ext
+# Update jdbc URL in /Temenos/TAFJ/conf/.properties
+RUN sed -i -e 's@temn.tafj.jdbc.url                  =@temn.tafj.jdbc.url                  = jdbc:h2:tcp://127.0.0.1:1521/R15MB@g' /Temenos/TAFJ/conf/tafj.properties
+
+RUN cd /Temenos && \
+	wget http://192.168.178.125:8000/MB.R15.000.H2.TAFJ-R15_SP2.Training.20151031.zip && \
+	unzip MB.R15.000.H2.TAFJ-R15_SP2.Training.20151031.zip && \
+	mv MB.R15.000.H2.TAFJ-R15_SP2.Training.20151031 t24home && \
+	rm MB.R15.000.H2.TAFJ-R15_SP2.Training.20151031.zip && \
+	rm t24home/R15MB.h2.db
+		
+# Set the TAFJ_HOME environment variable
+ENV TAFJ_HOME  /Temenos/TAFJ
+ENV T24MB_HOME /Temenos/t24home
+
+# update nginx
+ADD nginx/index.html        /var/www/index.html
+
+# configure supervisor
+ADD supervisor/h2.conf   		/etc/supervisor/conf.d/h2.conf
+
+#h2 tcp, nginx, h2 console, sshd
+EXPOSE 1521 80 91 22
+
+CMD ["/usr/bin/supervisord", "-n"]
